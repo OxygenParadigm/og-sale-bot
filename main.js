@@ -32,6 +32,15 @@ const MAX_PRIORITY_FEE_PER_GAS = ethers.parseUnits('6', 'gwei');
  */
 const ATTEMPTS_PER_TIER = 5;
 
+/**
+ * По умолчанию (`true`) бот остановится после первой успешной покупки на каждом кошельке и не будет пытаться брать следующие тиры.
+ *
+ * Если указать `false`, бот попытается купить все указанные тиры последовательно (1, 2, 3 и тд.).
+ * Например если указан 1-2 тир в количестве 5 штук, бот попробует купить 5 нод первого тира и 5 нод второго тира (в сумме получится до 10 нод).
+ * Для этого режима USDC должно хватить на покупку всех указанных тиров (бот сообщит об этом).
+ */
+const STOP_ON_FIRST_PURCHASE = true;
+
 //----- Остальные параметры ниже нежелательно редактировать! -----//
 
 const FALLBACK_PROVIDER = new ethers.FallbackProvider(
@@ -373,18 +382,20 @@ function start() {
 async function prepareForSale(wallet, amount, tiers) {
   const usdcContract = getUsdcContract(wallet);
 
-  const maxTierTotalCost = tiers[tiers.length - 1].price * amount;
+  const maxTotalCost = STOP_ON_FIRST_PURCHASE
+    ? tiers[tiers.length - 1].price * amount
+    : tiers.reduce((sum, tier) => sum + (tier.price * amount), 0);
   const usdcBalance = Number(await usdcContract.balanceOf.staticCall(wallet.address));
 
-  if (maxTierTotalCost > usdcBalance) {
-    console.error(chalk.red(`[${wallet.address}] Не хватает ${(maxTierTotalCost - usdcBalance) / Math.pow(10, 6)} USDC для покупки указанных тиров в количестве ${amount} шт.`));
+  if (maxTotalCost > usdcBalance) {
+    console.error(chalk.red(`[${wallet.address}] Не хватает ${(maxTotalCost - usdcBalance) / Math.pow(10, 6)} USDC для покупки указанных тиров в количестве ${amount} шт.`));
     console.error(chalk.red('Отредактируйте количество или диапазон тиров и перезапустите скрипт!'));
     console.log();
 
     return;
   }
 
-  await approveUsdc(wallet, maxTierTotalCost);
+  await approveUsdc(wallet, maxTotalCost);
 
   const estimatedGasLimit = 500_000n;
   const estimatedGasMaxCost = estimatedGasLimit * MAX_FEE_PER_GAS;
@@ -413,7 +424,7 @@ async function prepareForSale(wallet, amount, tiers) {
 
       await purchaseTier(wallet, amount, tier);
 
-      break;
+      if (STOP_ON_FIRST_PURCHASE) break;
     } catch (e) {
       console.error(chalk.red(`[${wallet.address}] Не удалось купить тир ${tier.id} :(`));
       console.error(chalk.bgRed(e.message));
